@@ -63,9 +63,15 @@ def test_dataset(tmp_tokenized_file: pathlib.Path) -> None:
 
 
 def test_datamodule(tmp_tokenized_file: pathlib.Path) -> None:
-    datamodule = minilm_v2.data.Datamodule(tmp_tokenized_file, 0, batch_size=2)
+    datamodule = minilm_v2.data.Datamodule(
+        tmp_tokenized_file, pad_token_id=0, sep_token_id=102, batch_size=2
+    )
     datamodule.setup()
     dataloader = datamodule.train_dataloader()
     data = next(iter(dataloader))
     assert len(dataloader) == 1
     assert any(sum(data.input_ids == 0))
+
+    datamodule.max_length = 5
+    data = next(iter(dataloader))
+    assert data.input_ids.shape[1] == 5

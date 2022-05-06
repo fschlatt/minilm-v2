@@ -23,54 +23,6 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-class Datamodule(pl.LightningDataModule):
-    """Generic DatamModule for pretokenized text
-
-    Args:
-        token_ids_path (str): Path to pickled token_ids file
-        tokenizer (str): Path to huggingface or local tokenizer
-        batch_size (int, optional): Batch size for training. Defaults to 1.
-        shuffle (bool, optional): Toggle for shuffling dataset. Defaults to True.
-    """
-
-    def __init__(
-        self,
-        token_ids_path: pathlib.Path,
-        pad_token_id: int,
-        batch_size: int = 1,
-        shuffle: bool = True,
-    ):
-        super().__init__()
-        self.token_ids_path = pathlib.Path(token_ids_path)
-        self.pad_token_id = pad_token_id
-        self.batch_size = batch_size
-        self.shuffle = shuffle
-
-    def setup(self, stage: Optional[str] = None) -> None:
-        if stage in (None, "fit"):
-            self.train_dataset = Dataset(self.token_ids_path)
-
-    def train_dataloader(self):
-        return torch.utils.data.DataLoader(
-            self.train_dataset,
-            batch_size=self.batch_size,
-            shuffle=self.shuffle,
-            collate_fn=self._collate,
-        )
-
-    def _collate(self, batch: List[np.ndarray]) -> transformers.BatchEncoding:
-        tensor_list = [torch.tensor(elem) for elem in batch]
-        padding_value = self.pad_token_id
-        input_ids = torch.nn.utils.rnn.pad_sequence(
-            tensor_list, batch_first=True, padding_value=padding_value
-        )
-        attention_mask = (input_ids != padding_value).long()
-        encoding = transformers.BatchEncoding(
-            {"input_ids": input_ids, "attention_mask": attention_mask}
-        )
-        return encoding
-
-
 class Dataset(torch.utils.data.Dataset):
     """Generic dataset for pretoknized text
 
@@ -90,6 +42,65 @@ class Dataset(torch.utils.data.Dataset):
 
     def __len__(self) -> int:
         return len(self.data)
+
+
+class Datamodule(pl.LightningDataModule):
+    """Generic DatamModule for pretokenized text
+
+    Args:
+        token_ids_path (str): Path to pickled token_ids file.
+        pad_token_id (int): ID of padding token in vocabulary.
+        sep_token_id (int): ID of separator token in vocabulary.
+        max_length (int, optional): Maximum sequence length. Defaults to None.
+        batch_size (int, optional): Batch size for training. Defaults to 1.
+        shuffle (bool, optional): Toggle for shuffling dataset. Defaults to True.
+    """
+
+    def __init__(
+        self,
+        token_ids_path: pathlib.Path,
+        pad_token_id: int,
+        sep_token_id: int,
+        max_length: Optional[int] = None,
+        batch_size: int = 1,
+        shuffle: bool = True,
+    ):
+        super().__init__()
+        self.token_ids_path = pathlib.Path(token_ids_path)
+        self.pad_token_id = pad_token_id
+        self.sep_token_id = sep_token_id
+        self.max_length = max_length
+        self.batch_size = batch_size
+        self.shuffle = shuffle
+
+    def setup(self, stage: Optional[str] = None) -> None:
+        if stage in (None, "fit"):
+            self.train_dataset = Dataset(self.token_ids_path)
+
+    def train_dataloader(self):
+        return torch.utils.data.DataLoader(
+            self.train_dataset,
+            batch_size=self.batch_size,
+            shuffle=self.shuffle,
+            collate_fn=self._collate,
+        )
+
+    def _collate(self, batch: List[np.ndarray]) -> transformers.BatchEncoding:
+        tensor_list = [torch.tensor(elem) for elem in batch]
+        input_ids = torch.nn.utils.rnn.pad_sequence(
+            tensor_list, batch_first=True, padding_value=self.pad_token_id
+        )
+        if self.max_length is not None:
+            input_ids = input_ids[:, : self.max_length]
+            too_long = (input_ids[:, -1] != self.pad_token_id) & (
+                input_ids[:, -1] != self.sep_token_id
+            )
+            input_ids[too_long, -1] = self.sep_token_id
+        attention_mask = (input_ids != self.pad_token_id).long()
+        encoding = transformers.BatchEncoding(
+            {"input_ids": input_ids, "attention_mask": attention_mask}
+        )
+        return encoding
 
 
 def _count_lines(path: pathlib.Path) -> int:
