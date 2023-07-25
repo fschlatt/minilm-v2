@@ -31,7 +31,7 @@ options:
 
 ## Distilling a Model
 
-Next, you need to write a huggingface `config.json` file specifying the model architecture you want to distill to. See `configs/config.json` for an example. Then, modifiy the `fit.yaml` configuration file. It contains all model, data, training and logging parameters. Note that the student path should be the path of the directory containing the `config.json` file. See the [Lightning CLI](https://lightning.ai/docs/pytorch/stable/api/lightning.pytorch.cli.LightningCLI.html) for details more information on all options. To start training, run `python minilm_v2/fit.py fit.yaml`.
+Next, you need to write a huggingface `config.json` file specifying the model architecture you want to distill to. See `configs/lh-h384/config.json` for an example. Then, modifiy the `fit.yaml` configuration file. It contains all model, data, training and logging parameters. Note that the student path should be the path of the directory containing the `config.json` file. See the [Lightning CLI](https://lightning.ai/docs/pytorch/stable/api/lightning.pytorch.cli.LightningCLI.html) for details more information on all options. To start training, run `python minilm_v2/fit.py fit.yaml`.
 
 NOTE: At the end of training, the model is saved in the directory of the architecture `config.json` file.
 
