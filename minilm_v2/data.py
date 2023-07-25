@@ -3,13 +3,14 @@ import json
 from argparse import ArgumentParser
 from itertools import repeat, takewhile
 from pathlib import Path
-from typing import Iterator, List, Optional, Sequence, Generator
+from typing import Generator, Iterator, List, Optional, Sequence
 
 import lightning.pytorch as pl
 import torch
+import torch.distributed as dist
 import tqdm
 import transformers
-from torch.utils.data import IterableDataset, DataLoader
+from torch.utils.data import DataLoader, IterableDataset, get_worker_info
 
 
 class Dataset(IterableDataset):
@@ -21,18 +22,35 @@ class Dataset(IterableDataset):
             max_length (int, optional): Maximum sequence length. Defaults to None.
     """
 
-    def __init__(self, token_ids_path: Path, max_length: Optional[int]) -> None:
+    def __init__(
+        self,
+        token_ids_path: Path,
+        max_length: Optional[int],
+        rank: int,
+        world_size: int,
+    ) -> None:
         super().__init__()
         self.token_ids_path = token_ids_path
         self.max_length = max_length
+        self.rank = rank
+        self.world_size = world_size
 
     def __iter__(self) -> Iterator[List[int]]:
+        worker_info = get_worker_info()
+        mod = self.world_size
+        shift = self.rank
+
+        if worker_info:
+            mod *= worker_info.num_workers
+            shift = self.rank * worker_info.num_workers + worker_info.id
+
         with gzip.open(self.token_ids_path) as file:
-            for line in file:
-                token_ids = json.loads(line)
-                if self.max_length is not None and len(token_ids) > self.max_length:
-                    token_ids = token_ids[: self.max_length - 1] + token_ids[-1:]
-                yield token_ids
+            for idx, line in enumerate(file):
+                if (idx + shift) % mod == 0:
+                    token_ids = json.loads(line)
+                    if self.max_length is not None and len(token_ids) > self.max_length:
+                        token_ids = token_ids[: self.max_length - 1] + token_ids[-1:]
+                    yield token_ids
 
 
 class DataModule(pl.LightningDataModule):
@@ -62,7 +80,17 @@ class DataModule(pl.LightningDataModule):
 
     def setup(self, stage: Optional[str] = None) -> None:
         if stage in (None, "fit"):
-            self.train_dataset = Dataset(self.token_ids_path, self.max_length)
+            if dist.is_available():
+                world_size = dist.get_world_size()
+            else:
+                world_size = 1
+            if dist.is_available():
+                rank = dist.get_rank()
+            else:
+                rank = 1
+            self.train_dataset = Dataset(
+                self.token_ids_path, self.max_length, rank, world_size
+            )
 
     def train_dataloader(self):
         return DataLoader(
