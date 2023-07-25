@@ -97,16 +97,12 @@ class MiniLMV2Module(pl.LightningModule):
             batch_size, seq_len, self.teacher.config.num_attention_heads, -1
         )
         if num_relation_heads > 0:
-            if num_relation_heads != student_tensor.shape[1]:
-                batch_size, seq_len, *_ = student_tensor.shape
-                student_tensor = student_tensor.reshape(
-                    batch_size, seq_len, num_relation_heads, -1
-                )
-            if num_relation_heads != teacher_tensor.shape[1]:
-                batch_size, seq_len, *_ = student_tensor.shape
-                teacher_tensor = teacher_tensor.reshape(
-                    batch_size, seq_len, num_relation_heads, -1
-                )
+            student_tensor = student_tensor.reshape(
+                batch_size, seq_len, num_relation_heads, -1
+            )
+            teacher_tensor = teacher_tensor.reshape(
+                batch_size, seq_len, num_relation_heads, -1
+            )
         student_tensor = student_tensor.permute(0, 2, 1, 3)
         teacher_tensor = teacher_tensor.permute(0, 2, 1, 3)
 
