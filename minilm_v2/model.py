@@ -134,12 +134,13 @@ class MiniLMV2Module(pl.LightningModule):
     def _aggregrate_minilm_loss(
         self, attention_mask: torch.Tensor, num_relation_heads: int = -1
     ) -> torch.Tensor:
+        device = self.cache["student_key"].device
         if num_relation_heads == -1:
             num_relation_heads = self.student.config.num_attention_heads
         attention_mask = self.teacher.get_extended_attention_mask(
-            attention_mask, attention_mask.shape, self.device
+            attention_mask, attention_mask.shape, device
         )
-        loss = torch.tensor(0.0, requires_grad=True, device=self.device)
+        loss = torch.tensor(0.0, requires_grad=True, device=device)
         for element in ["key", "query", "value"]:
             loss = loss + self._minilm_loss(
                 self.cache[f"student_{element}"],
