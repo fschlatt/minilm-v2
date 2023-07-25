@@ -1,0 +1,104 @@
+# lightning.pytorch==2.0.6
+seed_everything: true
+trainer:
+  accelerator: auto
+  strategy: auto
+  devices: auto
+  num_nodes: 1
+  precision: 32-true
+  logger:
+    class_path: WandbLogger
+    init_args:
+      name: null
+      save_dir: .
+      version: null
+      offline: false
+      dir: null
+      id: null
+      anonymous: null
+      project: null
+      log_model: false
+      experiment: null
+      prefix: ''
+      checkpoint_name: null
+  callbacks:
+    class_path: ModelCheckpoint
+    init_args:
+      dirpath: null
+      filename: null
+      monitor: null
+      verbose: false
+      save_last: null
+      save_top_k: 1
+      save_weights_only: false
+      mode: min
+      auto_insert_metric_name: true
+      every_n_train_steps: null
+      train_time_interval: null
+      every_n_epochs: null
+      save_on_train_epoch_end: null
+  fast_dev_run: false
+  max_epochs: null
+  min_epochs: null
+  max_steps: -1
+  min_steps: null
+  max_time: null
+  limit_train_batches: null
+  limit_val_batches: null
+  limit_test_batches: null
+  limit_predict_batches: null
+  overfit_batches: 0.0
+  val_check_interval: null
+  check_val_every_n_epoch: 1
+  num_sanity_val_steps: null
+  log_every_n_steps: null
+  enable_checkpointing: null
+  enable_progress_bar: null
+  enable_model_summary: null
+  accumulate_grad_batches: 1
+  gradient_clip_val: null
+  gradient_clip_algorithm: null
+  deterministic: null
+  benchmark: null
+  inference_mode: true
+  use_distributed_sampler: true
+  profiler: null
+  detect_anomaly: false
+  barebones: false
+  plugins: null
+  sync_batchnorm: false
+  reload_dataloaders_every_n_epochs: 0
+  default_root_dir: null
+model:
+  teacher_model_name_or_path: null
+  student_model_name_or_path: null
+  teacher_layer_index: -1
+  student_layer_index: -1
+  num_relation_heads: -1
+data:
+  token_ids_path: null
+  pad_token_id: null
+  max_length: null
+  batch_size: 1
+ckpt_path: null
+optimizer:
+  class_path: AdamW
+  init_args:
+    lr: 0.001
+    betas:
+    - 0.9
+    - 0.999
+    eps: 1.0e-08
+    weight_decay: 0.01
+    amsgrad: false
+    maximize: false
+    foreach: null
+    capturable: false
+    differentiable: false
+    fused: null
+lr_scheduler:
+  class_path: LinearSchedulerWithWarmup
+  init_args:
+    num_warmup_steps: null
+    num_training_steps: null
+    verbose: false

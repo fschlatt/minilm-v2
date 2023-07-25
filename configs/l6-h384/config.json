@@ -1,0 +1,7 @@
+{
+  "model_type": "bert",
+  "hidden_size": 384,
+  "num_hidden_layers": 6,
+  "embedding_size": 384,
+  "intermediate_size": 1536
+}

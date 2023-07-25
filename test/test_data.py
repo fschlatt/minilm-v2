@@ -1,49 +1,39 @@
-import pathlib
-import pickle
+from pathlib import Path
+import gzip
+import json
 
 import minilm_v2.data
 import pytest
 
-CONTENT = """This is one sentence. This a second sentence.\nThis is a new line."""
+
+TEST_DATA_DIR = Path(__file__).parent / "data"
 
 
 @pytest.fixture(scope="session")
-def tmp_text_file(tmp_path_factory: pytest.TempPathFactory) -> pathlib.Path:
-    tmp_text_file = tmp_path_factory.mktemp("minilm_v2_data") / "test_text.txt"
-    tmp_text_file.write_text(CONTENT)
-    return tmp_text_file
+def datamodule() -> minilm_v2.data.DataModule:
+    datamodule = minilm_v2.data.DataModule(
+        TEST_DATA_DIR / "test_text.jsonl.gz", pad_token_id=0, batch_size=2
+    )
+    datamodule.setup()
+    return datamodule
 
 
-@pytest.fixture(scope="session")
-def tmp_tokenized_file(tmp_text_file: pathlib.Path) -> pathlib.Path:
-    save_path = tmp_text_file.with_name("test_text.pkl")
+def test_tokenize(tmp_path_factory: pytest.TempPathFactory) -> None:
+    save_path = tmp_path_factory.mktemp("test_tokenize") / "test_text.jsonl.gz"
+    text_file = TEST_DATA_DIR / "test_text.txt"
 
-    minilm_v2.data.tokenize([tmp_text_file], save_path, "bert-base-uncased", False)
-
-    return save_path
-
-
-def test_tokenize(tmp_text_file: pathlib.Path) -> None:
-
-    save_path = tmp_text_file.with_name("test_text.pkl")
-
-    minilm_v2.data.tokenize([tmp_text_file], save_path, "bert-base-uncased", False)
-    with save_path.open("rb") as file:
-        data = pickle.load(file)
+    minilm_v2.data.tokenize([text_file], save_path, "bert-base-uncased")
+    with gzip.open(save_path) as file:
+        data = [json.loads(line) for line in file]
     assert len(data) == 2
 
-    minilm_v2.data.tokenize([tmp_text_file], save_path, "bert-base-uncased", True)
-    with save_path.open("rb") as file:
-        data = pickle.load(file)
-    assert len(data) == 3
 
-
-def test_main(tmp_text_file: pathlib.Path) -> None:
-
-    save_path = tmp_text_file.with_name("test_text.pkl")
+def test_main(tmp_path_factory: pytest.TempPathFactory) -> None:
+    save_path = tmp_path_factory.mktemp("test_tokenize") / "test_text.jsonl.gz"
+    text_file = TEST_DATA_DIR / "test_text.txt"
     args = [
         "--text_files",
-        str(tmp_text_file),
+        str(text_file),
         "--save_path",
         str(save_path),
         "--tokenizer_name",
@@ -51,27 +41,25 @@ def test_main(tmp_text_file: pathlib.Path) -> None:
     ]
 
     minilm_v2.data.main(args)
-    with save_path.open("rb") as file:
-        data = pickle.load(file)
+    with gzip.open(save_path) as file:
+        data = [json.loads(line) for line in file]
     assert len(data) == 2
 
 
-def test_dataset(tmp_tokenized_file: pathlib.Path) -> None:
-    dataset = minilm_v2.data.Dataset(tmp_tokenized_file)
-    assert len(dataset) == 2
-    assert dataset[0].shape != dataset[1].shape
+def test_dataset() -> None:
+    tokenized_file = TEST_DATA_DIR / "test_text.jsonl.gz"
+    dataset = minilm_v2.data.Dataset(tokenized_file, max_length=None)
+    num_lines = 0
+    for _ in dataset:
+        num_lines += 1
+    assert num_lines == 2
 
 
-def test_datamodule(tmp_tokenized_file: pathlib.Path) -> None:
-    datamodule = minilm_v2.data.Datamodule(
-        tmp_tokenized_file, pad_token_id=0, sep_token_id=102, batch_size=2
-    )
-    datamodule.setup()
+def test_datamodule(datamodule: minilm_v2.data.DataModule) -> None:
     dataloader = datamodule.train_dataloader()
     data = next(iter(dataloader))
-    assert len(dataloader) == 1
     assert any(sum(data.input_ids == 0))
 
-    datamodule.max_length = 5
+    datamodule.train_dataset.max_length = 5
     data = next(iter(dataloader))
     assert data.input_ids.shape[1] == 5

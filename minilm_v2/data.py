@@ -1,54 +1,45 @@
-import argparse
-import datetime
-import logging
-import pathlib
-import pickle
-import time
+import gzip
+import json
+from argparse import ArgumentParser
 from itertools import repeat, takewhile
-from typing import List, Optional, Sequence
+from pathlib import Path
+from typing import Iterator, List, Optional, Sequence, Generator
 
-import nltk
-import numpy as np
-import pytorch_lightning as pl
+import lightning.pytorch as pl
 import torch
-import torch.utils.data
 import tqdm
 import transformers
-
-logging.basicConfig(
-    format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
-    datefmt="%d/%m/%Y %H:%M:%S",
-    level=logging.INFO,
-)
-logger = logging.getLogger(__name__)
+from torch.utils.data import IterableDataset, DataLoader
 
 
-class Dataset(torch.utils.data.Dataset):
-    """Generic dataset for pretoknized text
+class Dataset(IterableDataset):
+    """Generic dataset for pre-tokenized text
 
     Args:
         Args:
-            token_ids_path (str): Path to pickled token_ids file
+            token_ids_path (str): Path gzipped jsonl file containing token ids.
+            max_length (int, optional): Maximum sequence length. Defaults to None.
     """
 
-    def __init__(self, token_ids_path: pathlib.Path) -> None:
+    def __init__(self, token_ids_path: Path, max_length: Optional[int]) -> None:
         super().__init__()
-        with token_ids_path.open("rb") as file:
-            self.data = pickle.load(file)
+        self.token_ids_path = token_ids_path
+        self.max_length = max_length
 
-    def __getitem__(self, index: int) -> np.ndarray:
-        token_ids = self.data[index].astype(np.dtype("int64"))
-        return token_ids
+    def __iter__(self) -> Iterator[List[int]]:
+        with gzip.open(self.token_ids_path) as file:
+            for line in file:
+                token_ids = json.loads(line)
+                if self.max_length is not None and len(token_ids) > self.max_length:
+                    token_ids = token_ids[: self.max_length - 1] + token_ids[-1:]
+                yield token_ids
 
-    def __len__(self) -> int:
-        return len(self.data)
 
-
-class Datamodule(pl.LightningDataModule):
-    """Generic DatamModule for pretokenized text
+class DataModule(pl.LightningDataModule):
+    """Generic DataModule for pre-tokenized text
 
     Args:
-        token_ids_path (str): Path to pickled token_ids file.
+        token_ids_path (str): Path gzipped jsonl file containing token ids.
         pad_token_id (int): ID of padding token in vocabulary.
         sep_token_id (int): ID of separator token in vocabulary.
         max_length (int, optional): Maximum sequence length. Defaults to None.
@@ -58,44 +49,34 @@ class Datamodule(pl.LightningDataModule):
 
     def __init__(
         self,
-        token_ids_path: pathlib.Path,
+        token_ids_path: Path,
         pad_token_id: int,
-        sep_token_id: int,
         max_length: Optional[int] = None,
         batch_size: int = 1,
-        shuffle: bool = True,
     ):
         super().__init__()
-        self.token_ids_path = pathlib.Path(token_ids_path)
+        self.token_ids_path = Path(token_ids_path)
         self.pad_token_id = pad_token_id
-        self.sep_token_id = sep_token_id
         self.max_length = max_length
         self.batch_size = batch_size
-        self.shuffle = shuffle
 
     def setup(self, stage: Optional[str] = None) -> None:
         if stage in (None, "fit"):
-            self.train_dataset = Dataset(self.token_ids_path)
+            self.train_dataset = Dataset(self.token_ids_path, self.max_length)
 
     def train_dataloader(self):
-        return torch.utils.data.DataLoader(
+        return DataLoader(
             self.train_dataset,
             batch_size=self.batch_size,
-            shuffle=self.shuffle,
             collate_fn=self._collate,
         )
 
-    def _collate(self, batch: List[np.ndarray]) -> transformers.BatchEncoding:
-        tensor_list = [torch.tensor(elem) for elem in batch]
+    def _collate(self, batch: List[List[int]]) -> transformers.BatchEncoding:
         input_ids = torch.nn.utils.rnn.pad_sequence(
-            tensor_list, batch_first=True, padding_value=self.pad_token_id
+            [torch.tensor(elem) for elem in batch],
+            batch_first=True,
+            padding_value=self.pad_token_id,
         )
-        if self.max_length is not None:
-            input_ids = input_ids[:, : self.max_length]
-            too_long = (input_ids[:, -1] != self.pad_token_id) & (
-                input_ids[:, -1] != self.sep_token_id
-            )
-            input_ids[too_long, -1] = self.sep_token_id
         attention_mask = (input_ids != self.pad_token_id).long()
         encoding = transformers.BatchEncoding(
             {"input_ids": input_ids, "attention_mask": attention_mask}
@@ -103,11 +84,11 @@ class Datamodule(pl.LightningDataModule):
         return encoding
 
 
-def _count_lines(path: pathlib.Path) -> int:
+def _count_lines(path: Path) -> int:
     """Counts number of lines in a file efficiently
 
     Args:
-        path (pathlib.Path): File path to count lines
+        path (Path): File path to count lines
 
     Returns:
         int: Number of lines in the file
@@ -121,78 +102,61 @@ def _count_lines(path: pathlib.Path) -> int:
     return count
 
 
-def tokenize(
-    text_files: List[pathlib.Path],
-    save_path: pathlib.Path,
+def batch_tokenize(
+    file_path: Path,
     tokenizer_name: str,
-    split_sentences: bool,
+    batch_size: int,
+    num_lines: Optional[int],
+) -> Generator[List[int], None, None]:
+    tokenizer = transformers.AutoTokenizer.from_pretrained(tokenizer_name)
+    with file_path.open("r", encoding="utf8") as fp:
+        pg = tqdm.tqdm(fp, total=num_lines)
+        texts = []
+        for idx, text in enumerate(pg):
+            texts.append(text)
+            if (idx + 1) % batch_size == 0:
+                token_ids = tokenizer(texts).input_ids
+                yield from token_ids
+                texts = []
+        token_ids = tokenizer(texts).input_ids
+        yield from token_ids
+
+
+def tokenize(
+    text_files: List[Path],
+    save_path: Path,
+    tokenizer_name: str,
     batch_size: int = 1000,
-    num_lines: Optional[int] = None,
+    num_lines: bool = False,
 ) -> None:
-    """Tokenize text files and writes the token ids to a pickle file. Each line in a
-    text file is considered as a new sample. Optionally splits the input by sentences.
+    """Tokenize text files and writes the token ids to a gzipped jsonl file. Each line in a
+    text file is considered as a new sample.
 
     Args:
-        text_files (List[pathlib.Path]): Text file paths to tokenize
-        save_path (pathlib.Path): Path to save the pickled token ids to
+        text_files (List[Path]): Text file paths to tokenize
+        save_path (Path): Path to save the pickled token ids to
         tokenizer_name (str): Name of or path to local huggingface tokenizer
-        split_sentences (bool): Toggle to split text into sentences
-        batch_size (int, optional): Number of lines to tokenize at once.
-        Defaults to 1000.
-        num_lines (Optional[int], optional): Total number of lines across all text 
-        files. Used to estimate total tokenization time. Set to -1 automatically count 
-        the number of lines. Defaults to None.
+        batch_size (int, optional): Number of lines to tokenize at once. Defaults to 1000.
+        num_lines (bool, optional): Set to True to count lines before tokenizing. Defaults to False.
     """
 
-    if num_lines == -1:
-        logger.info("Counting number of lines.")
-        num_lines = 0
+    total = None
+    if num_lines:
+        total = 0
         for text_file in text_files:
-            num_lines += _count_lines(text_file)
-
-    logger.info(f"Loading Tokenizer ({tokenizer_name}).")
-    tokenizer = transformers.AutoTokenizer.from_pretrained(tokenizer_name)
-
-    vocab_size = tokenizer.vocab_size
-    logger.info("Tokenizing text.")
-
-    splitter = nltk.sent_tokenize if split_sentences else lambda x: [x]
+            total += _count_lines(text_file)
 
     token_ids = []
-    pg = tqdm.tqdm(total=num_lines)
-    num_samples = 0
-    start = time.perf_counter()
-    for text_file in text_files:
-        with text_file.open("r", encoding="utf8") as file:
-            texts = []
-            for idx, text in enumerate(file):
-                texts.extend(splitter(text))
-                if (idx + 1) % batch_size == 0:
-                    token_ids.extend(tokenizer(texts)["input_ids"])
-                    num_samples += len(texts)
-                    texts = []
-                pg.update()
-            if texts:
-                token_ids.extend(tokenizer(texts)["input_ids"])
-                num_samples += len(texts)
-    elapsed = time.perf_counter() - start
-
-    logger.info(
-        f"Tokenized {num_lines} in {datetime.timedelta(seconds=elapsed)} "
-        f"lines and obtained {num_samples} samples."
-    )
-
-    dtype = np.dtype("uint16") if vocab_size < (1 << 16) else np.dtype("int32")
-    logger.info("Converting token_ids to numpy arrays.")
-    token_ids = [np.array(token_list, dtype=dtype) for token_list in token_ids]
-
-    logger.info("Saving file.")
-    with save_path.open("wb") as file:
-        pickle.dump(token_ids, file)
+    with gzip.open(save_path, "wb") as file:
+        for text_file in text_files:
+            for token_ids in batch_tokenize(
+                text_file, tokenizer_name, batch_size, num_lines
+            ):
+                file.write((json.dumps(token_ids) + "\n").encode("utf8"))
 
 
 def main(cli_args: Optional[Sequence[str]] = None):
-    parser = argparse.ArgumentParser(
+    parser = ArgumentParser(
         description="Tokenizes text files and writes the token ids to a pickle file. "
         "Each line in a text file is considered as a new sample. Optionally splits "
         "the input by sentences. "
@@ -200,14 +164,14 @@ def main(cli_args: Optional[Sequence[str]] = None):
 
     parser.add_argument(
         "--text_files",
-        type=pathlib.Path,
+        type=Path,
         nargs="+",
         required=True,
         help="Text file paths to tokenize",
     )
     parser.add_argument(
         "--save_path",
-        type=pathlib.Path,
+        type=Path,
         required=True,
         help="Path to save the pickled token ids to",
     )
@@ -218,11 +182,6 @@ def main(cli_args: Optional[Sequence[str]] = None):
         help="Name of or path to local huggingface tokenizer",
     )
     parser.add_argument(
-        "--split_sentences",
-        action="store_true",
-        help="Toggle to split text into sentences",
-    )
-    parser.add_argument(
         "--batch_size",
         type=int,
         default=1000,
@@ -230,9 +189,8 @@ def main(cli_args: Optional[Sequence[str]] = None):
     )
     parser.add_argument(
         "--num_lines",
-        type=int,
-        default=None,
-        help="Total number of lines across all text ",
+        action="store_true",
+        help="Count number of lines before tokenizing. Useful for estimating ETA.",
     )
 
     args = parser.parse_args(cli_args)
