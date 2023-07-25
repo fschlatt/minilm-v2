@@ -1,7 +1,6 @@
 import math
 from pathlib import Path
 from typing import Any, Dict
-from copy import deepcopy
 
 import lightning.pytorch as pl
 import lightning.pytorch.utilities as pl_utilities
@@ -80,7 +79,7 @@ class MiniLMV2Module(pl.LightningModule):
         loss = self._aggregrate_minilm_loss(
             data_batch["attention_mask"], self.num_relation_heads
         )
-        self.log("loss", loss)
+        self.log("loss", loss, prog_bar=True)
         return loss
 
     def _minilm_loss(
